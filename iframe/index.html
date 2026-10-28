@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>走线等距</title><style>:root{font:11px "Segoe UI","Microsoft YaHei",sans-serif;--text:#253448;--background:#f4f7fa;--control:#fff;--control-text:#24364b;--border:#b8c6d5;--muted:#576b80;--accent:#147d70;--accent-text:#fff;--status:#e5edf5;--error-text:#a32924;--error-bg:#fce7e5;color:var(--text);background:var(--background);color-scheme:light}
+:root[data-theme="dark"]{--text:#dce7f2;--background:#18222f;--control:#253447;--control-text:#e4edf7;--border:#405268;--muted:#94a9bf;--accent:#64d8c4;--accent-text:#0b302b;--status:#213247;--error-text:#ffc4c4;--error-bg:#482e36;color-scheme:dark}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--text:#dce7f2;--background:#18222f;--control:#253447;--control-text:#e4edf7;--border:#405268;--muted:#94a9bf;--accent:#64d8c4;--accent-text:#0b302b;--status:#213247;--error-text:#ffc4c4;--error-bg:#482e36;color-scheme:dark}}
+*{box-sizing:border-box}body{margin:0;padding:10px;min-width:260px}button,input,select{font:inherit;border:1px solid var(--border);border-radius:5px;background:var(--control);color:var(--control-text);height:27px;padding:4px 6px;min-width:0}button{cursor:pointer;white-space:nowrap}button:hover{border-color:var(--accent)}button:disabled,input:disabled{opacity:.45;cursor:default}.toolbar{display:flex;align-items:center;gap:5px}.toolbar strong{font-size:10px;font-weight:500;margin-left:auto;white-space:nowrap}.settings{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:7px}.spacing{display:grid;grid-template-columns:36px minmax(45px,1fr) 54px 42px;align-items:center;gap:5px;margin-top:7px}input{width:100%}#apply{background:var(--accent);color:var(--accent-text);border-color:var(--accent);font-weight:600}.gap{display:grid;grid-template-columns:83px minmax(40px,1fr) 76px;gap:5px;align-items:center;margin-top:7px}.gap span{font-size:10px;color:var(--muted)}.hint{font-size:9px;color:var(--muted);margin:4px 0}#status{font-size:10px;line-height:1.4;padding:6px 7px;border-radius:5px;background:var(--status);min-height:27px;overflow-wrap:anywhere}#status.error{color:var(--error-text);background:var(--error-bg)}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.compat-row{display:flex;justify-content:space-between;align-items:center;margin-top:6px;height:17px;font-size:10px}.compat-row label{display:flex;align-items:center;gap:4px;cursor:pointer}.compat-row input{width:12px;height:12px;margin:0;padding:0;accent-color:var(--accent)}.compat-row span{color:var(--muted)}
+</style></head>
+<body>
+<div class="toolbar"><button id="pick">两点取区</button><button id="read">读取选中</button><strong id="count">0 条线段</strong></div>
+<div class="settings"><select id="scope" aria-label="取区范围"><option value="route">完整走线</option><option value="segment" selected>独立线段</option></select><select id="layer" aria-label="铜层" title="自动读取所选导线的图层属性；也可手动指定铜层"><option value="auto" selected>自动识别</option><option value="1">顶层</option><option value="2">底层</option></select><select id="mode" aria-label="布线模型"><option value="direct">直接调整</option><option value="push" selected>推挤走线</option></select></div>
+<div class="spacing"><label for="spacing">中心距</label><input id="spacing" title="读取后自动填入所选走线的平均中心距，可手动修改" type="number" min="0" step="any" value="10"><select id="unit" aria-label="单位"><option>mil</option><option>mm</option></select><button id="apply" disabled>应用</button></div>
+<div class="gap"><label for="clearance">推挤避让净距</label><input id="clearance" type="text" placeholder="读取后显示" readonly><select id="clearanceSource" aria-label="净距来源"><option value="rules" selected>PCB规则</option><option value="manual">手动</option></select></div>
+<div class="compat-row"><label title="勾选：只展开不足中心距的并行区域；不勾选：严格等距。两种模式都保持端点连接。"><input id="compatible" type="checkbox">兼容模式</label><span id="strategy">严格等距</span></div>
+<p id="hint" class="hint">联动两端连接段 · 45°过渡 · 固定焊盘/过孔</p>
+<div id="status" role="status" aria-live="polite">正在连接控制器…</div>
+<script>window.addEventListener('error',function(e){var s=document.getElementById('status');if(s){s.textContent='面板启动失败：'+e.message;s.classList.add('error');}});window.addEventListener('unhandledrejection',function(e){var s=document.getElementById('status');if(s){s.textContent='操作失败：'+String(e.reason);s.classList.add('error');}});setTimeout(function(){if(!document.body.dataset.started){var s=document.getElementById('status');s.textContent='面板脚本未启动，请重新导入最新扩展包。';s.classList.add('error');}},4000);</script><script>"use strict";
+(() => {
+  // src/panel.ts
+  var COMMAND = "route-spacing-command-v3";
+  var STATE = "route-spacing-state-v3";
+  var byId = (id) => document.getElementById(id);
+  var unit = byId("unit");
+  var layer = byId("layer");
+  var mode = byId("mode");
+  var scope = byId("scope");
+  var spacing = byId("spacing");
+  var compatible = byId("compatible");
+  var clearance = byId("clearance");
+  var clearanceSource = byId("clearanceSource");
+  var busy = false;
+  var picking = false;
+  var valid = false;
+  var polling = false;
+  var previousFactor = 1;
+  var serial = 0;
+  var pending = "";
+  var layerList = "";
+  var manualClearanceMil = 6;
+  var ruleSummary;
+  var ruleError;
+  var spacingRevision = -1;
+  document.body.dataset.started = "true";
+  var readingTheme = false;
+  async function refreshTheme() {
+    if (readingTheme)
+      return;
+    readingTheme = true;
+    try {
+      if (typeof eda !== "undefined" && typeof eda.sys_Window?.getCurrentTheme === "function") {
+        const theme = await eda.sys_Window.getCurrentTheme();
+        if (theme === "light" || theme === "dark")
+          document.documentElement.dataset.theme = theme;
+      }
+    } catch {
+    } finally {
+      readingTheme = false;
+    }
+  }
+  void refreshTheme();
+  setInterval(() => void refreshTheme(), 1e3);
+  window.addEventListener("focus", () => void refreshTheme());
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden)
+      void refreshTheme();
+  });
+  function factor() {
+    return unit.value === "mm" ? 1 / 0.0254 : 1;
+  }
+  function status(message, error = false) {
+    byId("status").textContent = message;
+    byId("status").classList.toggle("error", error);
+  }
+  function renderRules() {
+    if (clearanceSource.value !== "rules")
+      return;
+    clearance.type = "text";
+    clearance.readOnly = true;
+    const format = (value) => String(Number((value / factor()).toFixed(5)));
+    clearance.value = !ruleError && ruleSummary ? `${format(ruleSummary.min)}${ruleSummary.max === ruleSummary.min ? "" : `–${format(ruleSummary.max)}`}` : "";
+    clearance.placeholder = ruleError ? "规则读取失败" : "读取后显示";
+    clearance.title = ruleError ?? (ruleSummary ? `${ruleSummary.description}；此处为目标导线间净距，焊盘/过孔/板边按对象规则分别避让` : "读取选中或两点取区时自动读取 PCB 设计规则");
+  }
+  function controls() {
+    byId("apply").disabled = busy || picking || !valid;
+    byId("read").disabled = busy || picking;
+    byId("pick").disabled = busy;
+    byId("pick").textContent = picking ? "取消取区" : "两点取区";
+    for (const field of [spacing, unit, layer, scope, mode, clearance, clearanceSource, compatible])
+      field.disabled = busy || picking;
+    clearance.disabled || (clearance.disabled = mode.value !== "push" || clearanceSource.value === "rules");
+    clearanceSource.disabled || (clearanceSource.disabled = mode.value !== "push");
+    renderRules();
+    byId("strategy").textContent = compatible.checked ? "仅展开间距不足区域" : "严格等距";
+    byId("hint").textContent = scope.value === "segment" ? "联动两端连接段 · 45°过渡 · 固定焊盘/过孔" : compatible.checked ? "局部展开 · 联动转角 · 固定端点" : "首条参考偏移 · 固定端点 · 45°过渡";
+  }
+  async function send(action) {
+    if (busy)
+      return;
+    const pitch = spacing.valueAsNumber * factor();
+    const gap = clearanceSource.value === "rules" ? 0 : clearance.valueAsNumber * factor();
+    if (action === "apply" && (!Number.isFinite(pitch) || pitch <= 0 || !Number.isFinite(gap) || gap < 0)) {
+      status("中心距须大于 0，避让净距不得小于 0", true);
+      return;
+    }
+    try {
+      busy = true;
+      controls();
+      status(action === "pick" ? "请依次单击画布的两个角" : "正在处理…");
+      pending = `${Date.now()}-${serial++}`;
+      if (!await eda.sys_Storage.setExtensionUserConfig(COMMAND, { id: pending, action, layer: layer.value === "auto" ? "auto" : Number(layer.value), scope: scope.value, spacing: pitch, clearance: gap, clearanceSource: clearanceSource.value, mode: mode.value, compatible: compatible.checked })) {
+        throw new Error("命令发送失败");
+      }
+    } catch (error) {
+      console.error("[RouteSpacing]", error);
+      busy = false;
+      status(String(error), true);
+      controls();
+    }
+  }
+  async function poll() {
+    if (polling)
+      return;
+    polling = true;
+    try {
+      const state = await eda.sys_Storage.getExtensionUserConfig(STATE);
+      if (!state)
+        return;
+      if (pending && state.ack !== pending)
+        return;
+      pending = "";
+      busy = !!state.busy;
+      picking = !!state.picking;
+      valid = !!state.valid;
+      if (valid && !busy && typeof state.selectionRevision === "number" && spacingRevision !== state.selectionRevision && typeof state.defaultSpacingMil === "number" && Number.isFinite(state.defaultSpacingMil) && state.defaultSpacingMil > 0) {
+        spacing.value = String(Number((state.defaultSpacingMil / factor()).toFixed(5)));
+        spacingRevision = state.selectionRevision;
+      }
+      if ("ruleSummary" in state)
+        ruleSummary = state.ruleSummary ?? void 0;
+      if ("ruleError" in state)
+        ruleError = typeof state.ruleError === "string" ? state.ruleError : void 0;
+      byId("count").textContent = `${Number(state.count) || 0} 条${state.scope === "segment" ? "线段" : "完整路径"}`;
+      status(state.message ?? "请取区或读取", !!state.error);
+      if (Array.isArray(state.layers) && JSON.stringify(state.layers) !== layerList) {
+        layerList = JSON.stringify(state.layers);
+        const old = layer.value;
+        const options = state.layers;
+        layer.replaceChildren(new Option("自动识别", "auto"), ...options.map((l) => new Option(l.name, String(l.id))));
+        if (old === "auto" || options.some((l) => String(l.id) === old))
+          layer.value = old;
+      }
+      const automatic = layer.querySelector('option[value="auto"]');
+      if (automatic) {
+        const detected = state.detectedLayer;
+        const name = detected?.id === 1 ? "顶层" : detected?.id === 2 ? "底层" : detected?.name;
+        automatic.textContent = name ? `自动·${name}` : "自动识别";
+        layer.title = name ? `已按导线图层属性识别：${detected.name}；重新读取时重新识别` : "自动读取所选导线的图层属性；也可手动指定铜层";
+      }
+      controls();
+    } catch (error) {
+      console.error("[RouteSpacing]", error);
+      status(`控制器连接失败：${String(error)}`, true);
+    } finally {
+      polling = false;
+    }
+  }
+  byId("pick").onclick = () => void send(picking ? "cancel" : "pick");
+  byId("read").onclick = () => void send("read");
+  byId("apply").onclick = () => void send("apply");
+  layer.onchange = scope.onchange = () => {
+    valid = false;
+    controls();
+    void send("cancel");
+  };
+  mode.onchange = controls;
+  compatible.onchange = controls;
+  clearanceSource.onchange = () => {
+    if (clearanceSource.value === "manual") {
+      clearance.type = "number";
+      clearance.readOnly = false;
+      clearance.value = String(Number((manualClearanceMil / factor()).toFixed(5)));
+      clearance.title = "手动覆盖 PCB 净距规则，单位同中心距";
+    } else if (Number.isFinite(clearance.valueAsNumber)) {
+      manualClearanceMil = clearance.valueAsNumber * factor();
+    }
+    controls();
+  };
+  unit.onchange = () => {
+    for (const field of clearanceSource.value === "manual" ? [spacing, clearance] : [spacing]) {
+      if (Number.isFinite(field.valueAsNumber))
+        field.value = String(Number((field.valueAsNumber * previousFactor / factor()).toFixed(5)));
+    }
+    previousFactor = factor();
+    renderRules();
+  };
+  controls();
+  void poll();
+  setInterval(() => {
+    void poll();
+  }, 250);
+})();
+</script></body></html>

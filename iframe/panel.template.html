@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>走线等距</title><link rel="stylesheet" href="/iframe/style.css"></head>
+<body>
+<div class="toolbar"><button id="pick">两点取区</button><button id="read">读取选中</button><strong id="count">0 条线段</strong></div>
+<div class="settings"><select id="scope" aria-label="取区范围"><option value="route">完整走线</option><option value="segment" selected>独立线段</option></select><select id="layer" aria-label="铜层" title="自动读取所选导线的图层属性；也可手动指定铜层"><option value="auto" selected>自动识别</option><option value="1">顶层</option><option value="2">底层</option></select><select id="mode" aria-label="布线模型"><option value="direct">直接调整</option><option value="push" selected>推挤走线</option></select></div>
+<div class="spacing"><label for="spacing">中心距</label><input id="spacing" title="读取后自动填入所选走线的平均中心距，可手动修改" type="number" min="0" step="any" value="10"><select id="unit" aria-label="单位"><option>mil</option><option>mm</option></select><button id="apply" disabled>应用</button></div>
+<div class="gap"><label for="clearance">推挤避让净距</label><input id="clearance" type="text" placeholder="读取后显示" readonly><select id="clearanceSource" aria-label="净距来源"><option value="rules" selected>PCB规则</option><option value="manual">手动</option></select></div>
+<div class="compat-row"><label title="勾选：只展开不足中心距的并行区域；不勾选：严格等距。两种模式都保持端点连接。"><input id="compatible" type="checkbox">兼容模式</label><span id="strategy">严格等距</span></div>
+<p id="hint" class="hint">联动两端连接段 · 45°过渡 · 固定焊盘/过孔</p>
+<div id="status" role="status" aria-live="polite">正在连接控制器…</div>
+<script src="/iframe/app.js"></script></body></html>
